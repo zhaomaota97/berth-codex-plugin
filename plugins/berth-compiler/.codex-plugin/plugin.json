@@ -1,6 +1,6 @@
 {
   "name": "berth-compiler",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Create or convert agents into validated Berth packages, verify fidelity, and publish them.",
   "author": {
     "name": "Berth Platform",
