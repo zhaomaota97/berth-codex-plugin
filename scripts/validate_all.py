@@ -23,6 +23,7 @@ def main() -> int:
     assert (PLUGIN / "skills" / "berth-compiler" / "SKILL.md").is_file()
     assert (PLUGIN / "scripts" / "berth_api.py").is_file()
     assert (PLUGIN / "scripts" / "validate_package.py").is_file()
+    assert (PLUGIN / "scripts" / "fidelity_report.py").is_file()
     codex_home = pathlib.Path(os.environ.get("CODEX_HOME", pathlib.Path.home() / ".codex"))
     validator = codex_home / "skills" / ".system" / "plugin-creator" / "scripts" / "validate_plugin.py"
     if validator.is_file():

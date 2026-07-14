@@ -137,6 +137,13 @@ Run the same cases against the source Agent and Berth Package when both are exec
 
 Write `.berth/fidelity-report.json` using the report template. Bind it to the final Package SHA-256.
 
+Calculate and bind the report with:
+
+```bash
+python3 "${CODEX_PLUGIN_ROOT}/scripts/fidelity_report.py" \
+  packages/<agent-id> .berth/fidelity-report.json --write
+```
+
 Grades:
 
 - A: at least 90 and all critical assertions pass.

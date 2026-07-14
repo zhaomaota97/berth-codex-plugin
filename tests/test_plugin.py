@@ -100,6 +100,32 @@ class PluginTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Internal terminology", result.stdout)
 
+    def test_fidelity_critical_failure_is_grade_d(self):
+        path = PLUGIN / "scripts" / "fidelity_report.py"
+        spec = importlib.util.spec_from_file_location("fidelity_report", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader
+        spec.loader.exec_module(module)
+        score, grade = module.calculate({
+            "critical_assertions": {"failed": 1},
+            "dimensions": {key: 100 for key in module.WEIGHTS},
+        })
+        self.assertIsNone(score)
+        self.assertEqual(grade, "D")
+
+    def test_fidelity_weighted_grade(self):
+        path = PLUGIN / "scripts" / "fidelity_report.py"
+        spec = importlib.util.spec_from_file_location("fidelity_report_score", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader
+        spec.loader.exec_module(module)
+        score, grade = module.calculate({
+            "critical_assertions": {"failed": 0},
+            "dimensions": {key: 92 for key in module.WEIGHTS},
+        })
+        self.assertEqual(score, 92)
+        self.assertEqual(grade, "A")
+
 
 if __name__ == "__main__":
     unittest.main()
