@@ -81,7 +81,7 @@ AGENTOUR_TOKEN="<token>" python3 "${CODEX_PLUGIN_ROOT}/scripts/agentour_api.py" 
   --platform <local|competition> models
 ```
 
-The `models` command probes every model returned by the selected platform and removes failed models from `data`; inspect `filtered_unavailable` for diagnostics. Use the contract's Smoke schema, Node/Eve versions, canonical model IDs, ignore rules, package limit, pricing unit, and runtime semantics. Select only from the filtered `data`, then run `model-probe <model>` once more immediately before generation. Do not use a model that fails. Ask about the model only if alternatives create a material business tradeoff.
+The `models` command probes every model returned by the selected platform, removes failed models from `data`, sorts usable models by platform quality rank, and returns `recommended_model`. Unless the user explicitly names a model, requests a cost ceiling, or says to prioritize economy, always use `recommended_model`: the Plugin must never silently downgrade Agent quality to save cost. Economic tradeoffs belong to the developer. Inspect `filtered_unavailable` only for diagnostics. Use the contract's Smoke schema, Node/Eve versions, canonical model IDs, ignore rules, package limit, pricing unit, and runtime semantics. Run `model-probe <model>` once more immediately before generation and never use a model that fails.
 
 ### 4. Source choice
 

@@ -31,7 +31,7 @@ DEFAULT_IGNORES = {
     "__pycache__", ".DS_Store",
 }
 DEFAULT_PATTERNS = {"*.log", "*.tmp", "*.swp", ".agentour-*.log"}
-PLUGIN_VERSION = "0.5.0"
+PLUGIN_VERSION = "0.5.1"
 LATEST_MANIFEST_URL = "https://raw.githubusercontent.com/zhaomaota97/agentour-codex-plugin/main/plugins/agentour-compiler/.codex-plugin/plugin.json"
 
 
@@ -133,7 +133,10 @@ def cmd_models(args):
                 unavailable.append({"id": model_id, "error": result.get("error", "probe failed")})
         except SystemExit as exc:
             unavailable.append({"id": model_id, "error": str(exc)[:500]})
+    available.sort(key=lambda item: (-int(item.get("quality_rank", 0)), item.get("id", "")))
+    recommended = available[0]["id"] if available else None
     print(json.dumps({"object": "list", "data": available,
+                      "recommended_model": recommended,
                       "filtered_unavailable": unavailable}, ensure_ascii=False, indent=2), flush=True)
 
 
