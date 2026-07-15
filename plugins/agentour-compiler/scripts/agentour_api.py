@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Berth compiler API client: contract, probes, clean archives, jobs, and feedback."""
+"""Agentour compiler API client: contract, probes, clean archives, jobs, and feedback."""
 
 from __future__ import annotations
 
@@ -11,11 +11,16 @@ import os
 import pathlib
 import re
 import subprocess
+import sys
 import tarfile
+import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from credential_store import delete_token, get_token
 
 PLATFORMS = {
     "local": {"name": "本地服", "url": "http://127.0.0.1:8600"},
@@ -25,9 +30,9 @@ DEFAULT_IGNORES = {
     "node_modules", ".output", ".eve", ".workflow-data", ".git",
     "__pycache__", ".DS_Store",
 }
-DEFAULT_PATTERNS = {"*.log", "*.tmp", "*.swp", ".berth-*.log"}
-PLUGIN_VERSION = "0.4.1"
-LATEST_MANIFEST_URL = "https://raw.githubusercontent.com/zhaomaota97/berth-codex-plugin/main/plugins/berth-compiler/.codex-plugin/plugin.json"
+DEFAULT_PATTERNS = {"*.log", "*.tmp", "*.swp", ".agentour-*.log"}
+PLUGIN_VERSION = "0.5.0"
+LATEST_MANIFEST_URL = "https://raw.githubusercontent.com/zhaomaota97/agentour-codex-plugin/main/plugins/agentour-compiler/.codex-plugin/plugin.json"
 
 
 def base_url(platform: str) -> str:
@@ -41,9 +46,9 @@ def request(platform: str, path: str, *, method: str = "GET",
     if data is not None:
         headers["Content-Type"] = content_type
     if auth:
-        token = os.environ.get("BERTH_TOKEN", "").strip()
-        if not token.startswith("bt_"):
-            raise SystemExit("BERTH_TOKEN must be a bt_ developer token")
+        token = os.environ.get("AGENTOUR_TOKEN", "").strip() or get_token(platform)
+        if not token.startswith("at_"):
+            raise SystemExit(f"No saved developer token for {platform}; store one before continuing")
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(base_url(platform) + path, data=data,
                                  headers=headers, method=method)
@@ -53,7 +58,9 @@ def request(platform: str, path: str, *, method: str = "GET",
             return json.loads(body) if body else {}
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", "replace")
-        raise SystemExit(f"Berth API {exc.code}: {detail}") from exc
+        if auth and exc.code in {401, 403} and not os.environ.get("AGENTOUR_TOKEN", "").strip():
+            delete_token(platform)
+        raise SystemExit(f"Agentour API {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise SystemExit(f"Cannot reach {base_url(platform)}: {exc.reason}") from exc
 
@@ -61,7 +68,7 @@ def request(platform: str, path: str, *, method: str = "GET",
 def ignore_rules(package_dir: pathlib.Path) -> tuple[set[str], set[str]]:
     names = set(DEFAULT_IGNORES)
     patterns = set(DEFAULT_PATTERNS)
-    path = package_dir / ".berthignore"
+    path = package_dir / ".agentourignore"
     if path.is_file():
         for raw in path.read_text(encoding="utf-8").splitlines():
             rule = raw.strip().strip("/")
@@ -109,7 +116,7 @@ def cmd_verify_token(args):
 
 
 def cmd_models(args):
-    discovered = request(args.platform, "/v1/models").get("data", [])
+    discovered = request(args.platform, "/v1/models?modality=chat").get("data", [])
     available, unavailable = [], []
     for item in discovered:
         model_id = str(item.get("id", "")).strip()
@@ -147,10 +154,10 @@ def cmd_check_update(args):
               "outdated": outdated, "updated": False}
     if outdated and args.auto:
         refresh = subprocess.run(
-            ["codex", "plugin", "marketplace", "upgrade", "berth-platform"],
+            ["codex", "plugin", "marketplace", "upgrade", "agentour-platform"],
             text=True, capture_output=True)
         completed = (subprocess.run(
-            ["codex", "plugin", "add", "berth-compiler@berth-platform"],
+            ["codex", "plugin", "add", "agentour-compiler@agentour-platform"],
             text=True, capture_output=True) if refresh.returncode == 0 else refresh)
         result["updated"] = refresh.returncode == 0 and completed.returncode == 0
         if not result["updated"]:
@@ -164,8 +171,8 @@ def cmd_check_update(args):
 
 def cmd_publish(args, asynchronous: bool):
     package = pathlib.Path(args.package).resolve()
-    if not (package / "berth.json").is_file():
-        raise SystemExit(f"Missing berth.json in {package}")
+    if not (package / "agentour.json").is_file():
+        raise SystemExit(f"Missing agentour.json in {package}")
     contract = authenticated(args, "/v1/dev/compiler-contract")
     payload, stats = package_payload(package)
     max_mb = int(contract["package"]["upload_max_mb"])
@@ -196,6 +203,77 @@ def cmd_publish(args, asynchronous: bool):
     raise SystemExit(f"Publish job {job_id} had no terminal result within {args.timeout}s")
 
 
+def cmd_build_test(args):
+    package = pathlib.Path(args.package).resolve()
+    payload = package / "payload"
+    if not (payload / "package.json").is_file():
+        raise SystemExit(f"Missing payload/package.json in {package}")
+    host_build = False
+    try:
+        node_version = subprocess.check_output(["node", "--version"], text=True).strip()
+        host_build = int(node_version.lstrip("v").split(".", 1)[0]) >= 24
+        if host_build:
+            subprocess.run(["pnpm", "--version"], check=True, capture_output=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
+        host_build = False
+    if not host_build:
+        docker = subprocess.run(["docker", "image", "inspect", "agentour-runtime:1"],
+                                text=True, capture_output=True)
+        if docker.returncode != 0:
+            raise SystemExit("Node 24+ is unavailable and Docker image agentour-runtime:1 is missing")
+    with tempfile.TemporaryDirectory(prefix="agentour-build-") as td:
+        target = pathlib.Path(td) / package.name
+        names, patterns = ignore_rules(package)
+        shutil_ignore = lambda _root, entries: [e for e in entries if e in names or any(fnmatch.fnmatch(e, p) for p in patterns)]
+        import shutil
+        shutil.copytree(package, target, ignore=shutil_ignore)
+        work = target / "payload"
+        docker_user = (["--user", f"{os.getuid()}:{os.getgid()}"]
+                       if hasattr(os, "getuid") else [])
+        commands = ([
+            ["pnpm", "install", "--frozen-lockfile"],
+            ["pnpm", "exec", "eve", "build"],
+        ] if host_build else [[
+            "docker", "run", "--rm", *docker_user,
+            "-e", "HOME=/tmp", "-e", "AGENTOUR_BUILD=1",
+            "-e", "AGENTOUR_URL=http://host.docker.internal:8600",
+            "-v", f"{work}:/agent", "-w", "/agent", "agentour-runtime:1",
+            "sh", "-lc", "pnpm install --frozen-lockfile && pnpm exec eve build",
+        ]])
+        for command in commands:
+            result = subprocess.run(command, cwd=work, text=True, capture_output=True, timeout=args.timeout)
+            if result.returncode != 0:
+                raise SystemExit(f"{' '.join(command)} failed:\n{(result.stdout + result.stderr)[-4000:]}")
+    print(json.dumps({"ok": True, "package": str(package),
+                      "checks": ["pnpm install --frozen-lockfile", "pnpm exec eve build"]},
+                     ensure_ascii=False), flush=True)
+
+
+def cmd_validate(args):
+    package = pathlib.Path(args.package).resolve()
+    contract = authenticated(args, "/v1/dev/compiler-contract")
+    payload, stats = package_payload(package)
+    max_mb = int(contract["package"]["upload_max_mb"])
+    if len(payload) > max_mb * 1024 * 1024:
+        raise SystemExit(f"Clean archive exceeds {max_mb}MB")
+    result = request(args.platform, "/v1/dev/validate-package", method="POST",
+                     data=payload, auth=True, content_type="application/gzip")
+    job_id = result.get("job_id")
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    deadline = time.monotonic() + args.timeout
+    previous = None
+    while time.monotonic() < deadline:
+        job = authenticated(args, f"/v1/dev/validate-jobs/{job_id}")
+        signature = (job.get("status"), job.get("updated_at"), job.get("error"))
+        if signature != previous:
+            print(json.dumps(job, ensure_ascii=False), flush=True); previous = signature
+        if job.get("status") in {"succeeded", "failed", "cancelled", "timed_out"}:
+            if job.get("status") != "succeeded": raise SystemExit(1)
+            return
+        time.sleep(args.poll_interval)
+    raise SystemExit(f"Validation job {job_id} timed out")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", choices=PLATFORMS, default="competition")
@@ -214,6 +292,13 @@ def main():
     feedback.add_argument("--operation", choices=("create", "reconstruct"), required=True)
     feedback.add_argument("--agent-id", action="append", default=[])
     feedback.add_argument("--publish-job", default="")
+    build_test = sub.add_parser("build-test")
+    build_test.add_argument("package")
+    build_test.add_argument("--timeout", type=float, default=900)
+    validate = sub.add_parser("validate-package")
+    validate.add_argument("package")
+    validate.add_argument("--timeout", type=float, default=1800)
+    validate.add_argument("--poll-interval", type=float, default=2)
     for name in ("publish", "publish-async"):
         publish = sub.add_parser(name)
         publish.add_argument("package")
@@ -244,6 +329,10 @@ def main():
                 "publish_job_id": args.publish_job, "markdown": markdown}
         print(json.dumps(authenticated(args, "/v1/dev/feedback", method="POST", body=body),
                          ensure_ascii=False, indent=2))
+    elif args.command == "build-test":
+        cmd_build_test(args)
+    elif args.command == "validate-package":
+        cmd_validate(args)
     elif args.command == "publish":
         cmd_publish(args, False)
     else:

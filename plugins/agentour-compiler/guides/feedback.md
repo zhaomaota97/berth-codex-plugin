@@ -5,7 +5,7 @@ Generate `问题梳理与优化意见清单.md` after successful deployment.
 Use this structure:
 
 ```markdown
-# Berth 平台与 Compiler Plugin 问题梳理与优化建议
+# Agentour 平台与 Compiler Plugin 问题梳理与优化建议
 
 ## 复盘范围
 - Plugin / version

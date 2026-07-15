@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static preflight aligned with Berth compiler contract v2026-07-14.1."""
+"""Static preflight aligned with Agentour compiler contract v2026-07-14.1."""
 
 from __future__ import annotations
 
@@ -64,14 +64,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(); parser.add_argument("package"); args = parser.parse_args()
     started = time.monotonic(); root = pathlib.Path(args.package).resolve()
     critical: list[str] = []; warnings: list[str] = []; passed: list[str] = []
-    required = ["berth.json", "README.md", "RELEASE.md", "tests/smoke.yaml",
+    required = ["agentour.json", "README.md", "RELEASE.md", "tests/smoke.yaml",
                 "payload/package.json", "payload/pnpm-lock.yaml", "payload/agent/agent.ts",
                 "payload/agent/instructions.md", "payload/agent/sandbox/sandbox.ts"]
     missing = [item for item in required if not (root / item).is_file()]
     critical.extend("Missing file: " + item for item in missing)
 
-    try: manifest = json.loads((root / "berth.json").read_text(encoding="utf-8"))
-    except Exception as exc: manifest = {}; critical.append(f"Invalid berth.json: {exc}")
+    try: manifest = json.loads((root / "agentour.json").read_text(encoding="utf-8"))
+    except Exception as exc: manifest = {}; critical.append(f"Invalid agentour.json: {exc}")
     for key in ("id", "name", "version", "runtime", "capabilities", "description", "pricing"):
         if not manifest.get(key): critical.append(f"Manifest field is required: {key}")
     pricing = manifest.get("pricing") or {}
@@ -108,7 +108,7 @@ def main() -> int:
         rel = path.relative_to(root).as_posix()
         for pattern in SECRET_CONTENT:
             if pattern.search(text): critical.append(f"Possible credential content in {rel}"); break
-        if rel == "berth.json" and FORBIDDEN_UI.search(text): critical.append("berth.json exposes internal terminology")
+        if rel == "agentour.json" and FORBIDDEN_UI.search(text): critical.append("agentour.json exposes internal terminology")
     smoke = root / "tests/smoke.yaml"
     if smoke.is_file(): critical.extend(validate_smoke(smoke))
     instructions = root / "payload/agent/instructions.md"

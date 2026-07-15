@@ -1,14 +1,14 @@
 {
-  "name": "berth-platform",
+  "name": "agentour-platform",
   "interface": {
-    "displayName": "Berth Platform"
+    "displayName": "Agentour Platform"
   },
   "plugins": [
     {
-      "name": "berth-compiler",
+      "name": "agentour-compiler",
       "source": {
         "source": "local",
-        "path": "./plugins/berth-compiler"
+        "path": "./plugins/agentour-compiler"
       },
       "policy": {
         "installation": "AVAILABLE",

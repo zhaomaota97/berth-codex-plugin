@@ -1,12 +1,12 @@
-# Berth Compiler for Codex
+# Agentour Compiler for Codex
 
-Official Codex Plugin for inventing new Berth Agents or reconstructing existing Agent projects with high behavioral fidelity.
+Official Codex Plugin for inventing new Agentour Agents or reconstructing existing Agent projects with high behavioral fidelity.
 
 ## Install
 
 ```bash
-codex plugin marketplace add zhaomaota97/berth-codex-plugin
-codex plugin add berth-compiler@berth-platform
+codex plugin marketplace add zhaomaota97/agentour-codex-plugin
+codex plugin add agentour-compiler@agentour-platform
 ```
 
 Start a new Thread after installation or upgrade.
@@ -16,13 +16,13 @@ Start a new Thread after installation or upgrade.
 Use natural language; do not choose internal Skills:
 
 ```text
-帮我创建并上传一个 Berth Agent。每轮只问我一个问题，其余流程你自动完成。
+帮我创建并上传一个 Agentour Agent。每轮只问我一个问题，其余流程你自动完成。
 ```
 
 The Plugin enforces this sequence:
 
 1. Choose **本地服** (`http://127.0.0.1:8600`) or **比赛服** (`http://61.29.254.146`).
-2. Enter a `bt_` developer token; the Plugin validates it with `GET /v1/dev/me` and asks again if invalid.
+2. Enter a `at_` developer token; the Plugin validates it with `GET /v1/dev/me` and asks again if invalid.
 3. Fetch models from that platform's `GET /v1/models`, probe every model, and remove unavailable models before selection.
 4. Choose whether to reconstruct an existing Agent or invent a new one.
 5. Complete a one-question-per-turn brainstorm and grill-me interview.

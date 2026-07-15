@@ -11,17 +11,17 @@ import sys
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "plugins" / "berth-compiler"
+PLUGIN = ROOT / "plugins" / "agentour-compiler"
 
 
 def main() -> int:
     manifest = json.loads((PLUGIN / ".codex-plugin" / "plugin.json").read_text())
     market = json.loads((ROOT / ".agents" / "plugins" / "marketplace.json").read_text())
-    assert manifest["name"] == "berth-compiler"
-    assert market["name"] == "berth-platform"
+    assert manifest["name"] == "agentour-compiler"
+    assert market["name"] == "agentour-platform"
     assert any(item["name"] == manifest["name"] for item in market["plugins"])
-    assert (PLUGIN / "skills" / "berth-compiler" / "SKILL.md").is_file()
-    assert (PLUGIN / "scripts" / "berth_api.py").is_file()
+    assert (PLUGIN / "skills" / "agentour-compiler" / "SKILL.md").is_file()
+    assert (PLUGIN / "scripts" / "agentour_api.py").is_file()
     assert (PLUGIN / "scripts" / "validate_package.py").is_file()
     assert (PLUGIN / "scripts" / "fidelity_report.py").is_file()
     codex_home = pathlib.Path(os.environ.get("CODEX_HOME", pathlib.Path.home() / ".codex"))

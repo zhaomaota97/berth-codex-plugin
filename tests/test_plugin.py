@@ -12,12 +12,12 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-PLUGIN = ROOT / "plugins" / "berth-compiler"
+PLUGIN = ROOT / "plugins" / "agentour-compiler"
 
 
 def load_api():
-    path = PLUGIN / "scripts" / "berth_api.py"
-    spec = importlib.util.spec_from_file_location("berth_api", path)
+    path = PLUGIN / "scripts" / "agentour_api.py"
+    spec = importlib.util.spec_from_file_location("agentour_api", path)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader
     spec.loader.exec_module(module)
@@ -32,7 +32,7 @@ class PluginTests(unittest.TestCase):
             "tests/smoke.yaml": 'schema_version: 1\ncases:\n  - send: "x"\n    expect_contains: "ok"\n',
             "payload/package.json": '{"engines":{"node":">=24"}}\n',
             "payload/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-            "payload/agent/agent.ts": "const url = process.env.BERTH_URL;\n",
+            "payload/agent/agent.ts": "const url = process.env.AGENTOUR_URL;\n",
             "payload/agent/instructions.md": "# Demo\n缺少信息时调用 ask_question。\n",
             "payload/agent/sandbox/sandbox.ts": "export default {};\n",
         }
@@ -45,7 +45,7 @@ class PluginTests(unittest.TestCase):
                 "capabilities": {"review": {"display_name": "内容审查", "loading_message": "正在加载内容审查能力…"}},
             },
         }
-        files["berth.json"] = json.dumps(manifest, ensure_ascii=False)
+        files["agentour.json"] = json.dumps(manifest, ensure_ascii=False)
         for name, content in files.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -54,7 +54,7 @@ class PluginTests(unittest.TestCase):
     def test_manifest_and_marketplace_names_match(self):
         manifest = json.loads((PLUGIN / ".codex-plugin/plugin.json").read_text())
         market = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text())
-        self.assertEqual(manifest["name"], "berth-compiler")
+        self.assertEqual(manifest["name"], "agentour-compiler")
         self.assertEqual(market["plugins"][0]["name"], manifest["name"])
 
     def test_fixed_platform_urls(self):
@@ -62,18 +62,41 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(api.base_url("local"), "http://127.0.0.1:8600")
         self.assertEqual(api.base_url("competition"), "http://61.29.254.146")
 
-    def test_token_requires_bt_prefix(self):
+    def test_token_requires_at_prefix(self):
         api = load_api()
-        old = os.environ.get("BERTH_TOKEN")
-        os.environ["BERTH_TOKEN"] = "wrong"
+        old = os.environ.get("AGENTOUR_TOKEN")
+        os.environ["AGENTOUR_TOKEN"] = "wrong"
         try:
             with self.assertRaises(SystemExit):
                 api.request("competition", "/v1/dev/me", auth=True)
         finally:
             if old is None:
-                os.environ.pop("BERTH_TOKEN", None)
+                os.environ.pop("AGENTOUR_TOKEN", None)
             else:
-                os.environ["BERTH_TOKEN"] = old
+                os.environ["AGENTOUR_TOKEN"] = old
+
+    def test_credentials_are_separated_by_platform(self):
+        path = PLUGIN / "scripts/credential_store.py"
+        spec = importlib.util.spec_from_file_location("credential_store_test", path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader
+        spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as temp:
+            old = {key: os.environ.get(key) for key in ("XDG_CONFIG_HOME", "AGENTOUR_CREDENTIAL_BACKEND")}
+            os.environ["XDG_CONFIG_HOME"] = temp
+            os.environ["AGENTOUR_CREDENTIAL_BACKEND"] = "restricted-file"
+            try:
+                module.set_token("local", "at_local_token_value")
+                module.set_token("competition", "at_competition_token_value")
+                self.assertEqual(module.get_token("local"), "at_local_token_value")
+                self.assertEqual(module.get_token("competition"), "at_competition_token_value")
+                module.delete_token("local")
+                self.assertEqual(module.get_token("local"), "")
+                self.assertEqual(module.get_token("competition"), "at_competition_token_value")
+            finally:
+                for key, value in old.items():
+                    if value is None: os.environ.pop(key, None)
+                    else: os.environ[key] = value
 
     def test_package_tarball(self):
         api = load_api()
@@ -84,7 +107,7 @@ class PluginTests(unittest.TestCase):
             self.assertEqual(payload[:2], b"\x1f\x8b")
             self.assertGreater(stats["files"], 0)
             with tarfile.open(fileobj=__import__("io").BytesIO(payload), mode="r:gz") as archive:
-                self.assertIn("demo/berth.json", archive.getnames())
+                self.assertIn("demo/agentour.json", archive.getnames())
 
     def test_package_tarball_excludes_generated_dependencies(self):
         api = load_api()
@@ -111,7 +134,7 @@ class PluginTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             package = pathlib.Path(temp) / "demo"
             self.make_package(package)
-            manifest_path = package / "berth.json"
+            manifest_path = package / "agentour.json"
             manifest = json.loads(manifest_path.read_text())
             manifest["runtime_ui"]["capabilities"]["review"]["loading_message"] = "load skill review"
             manifest_path.write_text(json.dumps(manifest), encoding="utf-8")

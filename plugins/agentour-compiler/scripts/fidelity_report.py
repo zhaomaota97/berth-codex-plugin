@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Calculate and validate a Berth migration fidelity report."""
+"""Calculate and validate a Agentour migration fidelity report."""
 
 from __future__ import annotations
 
