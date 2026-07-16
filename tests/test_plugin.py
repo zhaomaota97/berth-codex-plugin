@@ -62,6 +62,12 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(api.base_url("local"), "http://127.0.0.1:8600")
         self.assertEqual(api.base_url("competition"), "http://61.29.254.146")
 
+    def test_template_requires_session_scoped_runtime_token(self):
+        template = (PLUGIN / "templates/agent.ts").read_text(encoding="utf-8")
+        self.assertIn("process.env.AGENTOUR_RUNTIME_TOKEN", template)
+        self.assertNotIn("process.env.AGENTOUR_RUNTIME_KEY", template)
+        self.assertNotIn("build-only-placeholder", template)
+
     def test_token_requires_at_prefix(self):
         api = load_api()
         old = os.environ.get("AGENTOUR_TOKEN")

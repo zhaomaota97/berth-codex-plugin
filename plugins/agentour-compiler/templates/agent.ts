@@ -1,14 +1,18 @@
 import { createDeepSeek } from "@ai-sdk/deepseek";
 import { defineAgent } from "eve";
 
-// Runtime injects both values. Build Gate injects AGENTOUR_URL only, so runtime
-// secrets must not be validated at module-import time.
-const agentourURL = process.env.AGENTOUR_URL?.replace(/\/$/, "") || "http://agentour-build.invalid";
-const runtimeKey = process.env.AGENTOUR_RUNTIME_KEY || "build-only-placeholder";
+const agentourURL = process.env.AGENTOUR_URL?.replace(/\/$/, "");
+if (!agentourURL) {
+  throw new Error("AGENTOUR_URL is required before the Agent starts");
+}
+const runtimeToken = process.env.AGENTOUR_RUNTIME_TOKEN;
+if (!runtimeToken) {
+  throw new Error("AGENTOUR_RUNTIME_TOKEN is required before the Agent starts");
+}
 
 const provider = createDeepSeek({
   baseURL: `${agentourURL}/v1/llm`,
-  apiKey: runtimeKey,
+  apiKey: runtimeToken,
 });
 
 export default defineAgent({
