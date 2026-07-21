@@ -106,14 +106,23 @@ class PluginTests(unittest.TestCase):
                                state='{"stage":"discovery"}')
         with mock.patch.object(api, "authenticated", return_value={"id": "cmp_1"}) as call:
             api.cmd_create_compiler_task(args)
-        self.assertEqual(call.call_args.args[1], "/v1/dev/compiler-tasks")
-        self.assertEqual(call.call_args.kwargs["body"]["operation"], "update")
+        create_call = call.call_args_list[0]
+        self.assertEqual(create_call.args[1], "/v1/dev/compiler-tasks")
+        self.assertEqual(create_call.kwargs["body"]["operation"], "update")
 
     def test_template_requires_session_scoped_runtime_token(self):
         template = (PLUGIN / "templates/agent.ts").read_text(encoding="utf-8")
         self.assertIn("process.env.AGENTOUR_RUNTIME_TOKEN", template)
         self.assertNotIn("process.env.AGENTOUR_RUNTIME_KEY", template)
         self.assertNotIn("build-only-placeholder", template)
+        self.assertNotIn("system:", template)
+        self.assertNotIn("throw new Error", template)
+        package = json.loads((PLUGIN / "templates/package.json").read_text(encoding="utf-8"))
+        self.assertTrue(all(not version.startswith(("^", "~"))
+                            for version in package["dependencies"].values()))
+        workspace = (PLUGIN / "templates/pnpm-workspace.yaml").read_text(encoding="utf-8")
+        self.assertIn("allowBuilds:", workspace)
+        self.assertIn("minimumReleaseAge: 1440", workspace)
 
     def test_token_requires_at_prefix(self):
         api = load_api()
@@ -127,6 +136,27 @@ class PluginTests(unittest.TestCase):
                 os.environ.pop("AGENTOUR_TOKEN", None)
             else:
                 os.environ["AGENTOUR_TOKEN"] = old
+
+    def test_flight_recorder_persists_redacted_job_evidence(self):
+        script = PLUGIN / "scripts/flight_recorder.py"
+        spec = importlib.util.spec_from_file_location("agentour_flight_test", script)
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as td:
+            old = os.environ.get("AGENTOUR_COMPILER_FLIGHT_LOG")
+            os.environ["AGENTOUR_COMPILER_FLIGHT_LOG"] = str(pathlib.Path(td) / "flight.json")
+            try:
+                module.record("failure", error="Bearer secret-value", api_key="sk-secret-value")
+                module.record_job_sample("validation", {
+                    "id": "val_1", "status": "running",
+                    "report": {"heartbeat_at": 12, "stage": "smoke"}},
+                    poll_count=3, unchanged_seconds=20, poll_interval_seconds=2)
+                data = module.read()
+            finally:
+                if old is None: os.environ.pop("AGENTOUR_COMPILER_FLIGHT_LOG", None)
+                else: os.environ["AGENTOUR_COMPILER_FLIGHT_LOG"] = old
+        self.assertEqual(data["events"][0]["api_key"], "[REDACTED]")
+        self.assertNotIn("secret-value", json.dumps(data))
+        self.assertEqual(data["events"][1]["poll_count"], 3)
 
     def test_credentials_are_separated_by_platform(self):
         path = PLUGIN / "scripts/credential_store.py"

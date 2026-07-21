@@ -173,6 +173,12 @@ Do not implement until the spec can reproduce the intended workflow. Do not ask 
 
 Create each Package under `packages/<agent-id>/` from bundled templates with `agentour.json`, `README.md`, `RELEASE.md`, `tests/smoke.yaml`, and a complete `payload/` Eve project.
 
+Follow the fetched Compiler Contract literally. For Contract v4 and later: put behavioral instructions
+in `payload/agent/instructions.md` (never `defineAgent.system`), do not throw for missing Runtime
+credentials during module import/build, pin every direct dependency to an exact version, never use
+`package.json#pnpm.overrides`, and copy the audited `templates/pnpm-workspace.yaml` so native Eve
+dependencies use the remote Build's exact `allowBuilds` policy.
+
 Preserve source business rules, orchestration, tool contracts, approvals, attachment behavior, output schemas, artefacts, retry behavior, and user-visible flow. Every capability needs business-readable `runtime_ui` labels. Never expose `load skill`, internal paths, or system prompts. `waiting_approval` means paused and waiting, never running.
 
 - Price in **积分** using `pricing.amount_credits`; never describe it as RMB cents.
@@ -251,23 +257,19 @@ Follow every job. On Gate failure, fix, bump the version when required, rebuild 
 
 ## Required post-publish platform feedback
 
-After every successful platform deployment, create `问题梳理与优化意见清单.md`. This is **not** an Agent defect report. Include only issues and improvement opportunities in:
-
-- Agentour platform capability, APIs, Gates, runtime, sandbox, models, billing semantics, diagnostics, documentation, or console;
-- Claude/Codex Plugin workflow, templates, validators, packaging, interview quality, defaults, guidance, fidelity process, or observability.
-
-Use evidence from the full run: confusing questions, misunderstood intent, wrong defaults, contract drift, unnecessary dependencies, platform-only failures, retries, weak diagnostics, fidelity gaps caused by platform limitations, and manual work the Plugin should automate. Do not blame the generated Agent for ordinary domain-specific defects.
-
-Read `guides/feedback.md` before writing the report.
-
-The Markdown must contain run scope, successful publish result, prioritized P0/P1/P2 findings, evidence, root cause, and actionable recommendations. If no issue was found, upload a short report stating what was checked and that no platform/Plugin defect was observed.
+After every successful platform deployment, create exactly one complete, redacted run flight recorder.
+Read `guides/feedback.md` in full and follow its evidence boundaries and required 18-section format.
+The readable filename must be `<agent-readable-name>-<operation>-完整运行现象记录-<YYYYMMDD-HHmm>.md`.
+Do not create a short/user/summary alternative. Persist evidence continuously through
+`scripts/flight_recorder.py`; do not reconstruct failures, latency, Job transitions, Package hashes,
+polling or unknown environment facts from memory after publishing.
 
 Upload it with the same validated token to the selected platform:
 
 ```bash
 AGENTOUR_TOKEN="<token>" python3 "${CODEX_PLUGIN_ROOT}/scripts/agentour_api.py" \
-  --platform <local|competition> feedback "问题梳理与优化意见清单.md" \
-  --plugin-version "0.3.0" --operation <create|reconstruct> \
+  --platform <local|competition> feedback "<readable-run-report>.md" \
+  --plugin-version "0.8.2" --operation <create|reconstruct|update> \
   --agent-id <agent-id> --publish-job <job-id>
 ```
 

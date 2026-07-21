@@ -22,6 +22,7 @@ import urllib.request
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from credential_store import delete_token, get_token
+from flight_recorder import read as read_flight, record as record_flight, record_job_sample
 
 PLATFORMS = {
     "local": {"name": "本地服", "url": "http://127.0.0.1:8600"},
@@ -32,7 +33,7 @@ DEFAULT_IGNORES = {
     "__pycache__", ".DS_Store",
 }
 DEFAULT_PATTERNS = {"*.log", "*.tmp", "*.swp", ".agentour-*.log"}
-PLUGIN_VERSION = "0.8.1"
+PLUGIN_VERSION = "0.8.2"
 LATEST_MANIFEST_URL = "https://raw.githubusercontent.com/Onesyn-ai/agentour-codex-plugin/main/plugins/agentour-compiler/.codex-plugin/plugin.json"
 
 
@@ -108,6 +109,36 @@ def package_payload(package_dir: pathlib.Path) -> tuple[bytes, dict]:
 def authenticated(args, path: str, *, method: str = "GET", body: dict | None = None):
     data = json.dumps(body, ensure_ascii=False).encode("utf-8") if body is not None else None
     return request(args.platform, path, method=method, data=data, auth=True)
+
+
+def sync_flight(args, task_id: str = "") -> None:
+    """Best-effort mirror of recent redacted events into the durable remote Compiler Task."""
+    if not task_id:
+        state_path = pathlib.Path(".agentour/compiler-state.json")
+        if state_path.is_file():
+            try:
+                state = json.loads(state_path.read_text(encoding="utf-8"))
+                task_id = str(state.get("compiler_task_id") or state.get("task_id") or "")
+            except Exception:
+                task_id = ""
+    if not task_id:
+        return
+    try:
+        quoted = urllib.parse.quote(task_id, safe="")
+        task = authenticated(args, f"/v1/dev/compiler-tasks/{quoted}")
+        flight = read_flight()
+        authenticated(args, f"/v1/dev/compiler-tasks/{quoted}", method="PATCH", body={
+            "expected_revision": task.get("revision"),
+            "state": {"flight_recorder": {
+                "report_schema_version": flight.get("report_schema_version", "1.0"),
+                "updated_at": flight.get("updated_at"),
+                "event_count": len(flight.get("events", [])),
+                "events": flight.get("events", [])[-100:],
+            }},
+        })
+    except BaseException:
+        # Telemetry persistence must never make an otherwise valid build/publish fail.
+        return
 
 
 def cmd_verify_token(args):
@@ -233,6 +264,11 @@ def cmd_bootstrap(args):
         "active_compiler_tasks": tasks,
         "ready_for_interview": bool(models.get("recommended_model")),
     })
+    record_flight("bootstrap_completed", platform=platform,
+                  contract_version=contract.get("contract_version"),
+                  developer_id=identity.get("developer_id"),
+                  recommended_model=models.get("recommended_model"),
+                  active_compiler_task_ids=[item.get("id") for item in tasks])
     print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
     if not result["ready_for_interview"]:
         raise SystemExit(1)
@@ -252,19 +288,32 @@ def cmd_publish(args, asynchronous: bool):
     endpoint = ("/v1/dev/publish-async" if asynchronous else "/v1/dev/publish") + "?" + query
     result = request(args.platform, endpoint, method="POST", data=payload, auth=True,
                      content_type="application/gzip")
+    record_flight("publish_submitted", platform=args.platform, visibility=args.visibility,
+                  package=str(package), archive=stats, response=result)
     print(json.dumps(result, ensure_ascii=False), flush=True)
     job_id = result.get("job_id") if isinstance(result, dict) else None
     if not asynchronous or not job_id or args.no_wait:
         return
     deadline = time.monotonic() + args.timeout
     previous = None
+    polls = 0; unchanged_since = time.monotonic(); last_sample_at = 0.0
     while time.monotonic() < deadline:
+        polls += 1
         job = authenticated(args, f"/v1/dev/publish-jobs/{job_id}")
         signature = (job.get("status"), job.get("updated_at"), job.get("error"))
-        if signature != previous:
+        changed = signature != previous
+        if changed:
+            unchanged_since = time.monotonic()
             print(json.dumps(job, ensure_ascii=False), flush=True)
             previous = signature
+            sync_flight(args)
+        if changed or time.monotonic() - last_sample_at >= 30:
+            record_job_sample("publish", job, poll_count=polls,
+                              unchanged_seconds=time.monotonic() - unchanged_since,
+                              poll_interval_seconds=args.poll_interval)
+            last_sample_at = time.monotonic()
         if job.get("status") in {"succeeded", "failed", "cancelled", "timed_out"}:
+            sync_flight(args)
             if job.get("status") != "succeeded":
                 raise SystemExit(1)
             return
@@ -291,6 +340,8 @@ def cmd_build_test(args):
         if docker.returncode != 0:
             raise SystemExit("Node 24+ is unavailable and Docker image agentour-runtime:1 is missing")
     with tempfile.TemporaryDirectory(prefix="agentour-build-") as td:
+        started_at = time.time()
+        record_flight("local_build_started", package=str(package))
         target = pathlib.Path(td) / package.name
         names, patterns = ignore_rules(package)
         shutil_ignore = lambda _root, entries: [e for e in entries if e in names or any(fnmatch.fnmatch(e, p) for p in patterns)]
@@ -317,7 +368,12 @@ def cmd_build_test(args):
             result = subprocess.run(command, cwd=work, text=True, capture_output=True,
                                     timeout=args.timeout, env=build_env)
             if result.returncode != 0:
+                record_flight("local_build_failed", package=str(package), command=command,
+                              duration_seconds=round(time.time() - started_at, 3),
+                              error=(result.stdout + result.stderr)[-4000:])
                 raise SystemExit(f"{' '.join(command)} failed:\n{(result.stdout + result.stderr)[-4000:]}")
+    record_flight("local_build_completed", package=str(package),
+                  duration_seconds=round(time.time() - started_at, 3))
     print(json.dumps({"ok": True, "package": str(package),
                       "checks": ["pnpm install --frozen-lockfile", "pnpm exec eve build"]},
                      ensure_ascii=False), flush=True)
@@ -332,16 +388,29 @@ def cmd_validate(args):
         raise SystemExit(f"Clean archive exceeds {max_mb}MB")
     result = request(args.platform, "/v1/dev/validate-package", method="POST",
                      data=payload, auth=True, content_type="application/gzip")
+    record_flight("validation_submitted", platform=args.platform, package=str(package),
+                  archive=stats, response=result)
     job_id = result.get("job_id")
     print(json.dumps(result, ensure_ascii=False), flush=True)
     deadline = time.monotonic() + args.timeout
     previous = None
+    polls = 0; unchanged_since = time.monotonic(); last_sample_at = 0.0
     while time.monotonic() < deadline:
+        polls += 1
         job = authenticated(args, f"/v1/dev/validate-jobs/{job_id}")
         signature = (job.get("status"), job.get("updated_at"), job.get("error"))
-        if signature != previous:
+        changed = signature != previous
+        if changed:
+            unchanged_since = time.monotonic()
             print(json.dumps(job, ensure_ascii=False), flush=True); previous = signature
+            sync_flight(args)
+        if changed or time.monotonic() - last_sample_at >= 30:
+            record_job_sample("validation", job, poll_count=polls,
+                              unchanged_seconds=time.monotonic() - unchanged_since,
+                              poll_interval_seconds=args.poll_interval)
+            last_sample_at = time.monotonic()
         if job.get("status") in {"succeeded", "failed", "cancelled", "timed_out"}:
+            sync_flight(args)
             if job.get("status") != "succeeded": raise SystemExit(1)
             return
         time.sleep(args.poll_interval)
@@ -353,18 +422,31 @@ def cmd_remote_build(args):
     payload, stats = package_payload(package)
     result = request(args.platform, "/v1/dev/builds", method="POST", data=payload,
                      auth=True, content_type="application/gzip")
+    record_flight("remote_build_submitted", platform=args.platform, package=str(package),
+                  archive=stats, response=result)
     print(json.dumps({**result, "archive": stats}, ensure_ascii=False), flush=True)
     job_id = result.get("job_id")
     if not job_id or args.no_wait:
         return
     deadline = time.monotonic() + args.timeout
     previous = None
+    polls = 0; unchanged_since = time.monotonic(); last_sample_at = 0.0
     while time.monotonic() < deadline:
+        polls += 1
         job = authenticated(args, f"/v1/dev/builds/{job_id}")
         signature = (job.get("status"), json.dumps(job.get("data", {}).get("gates", []), sort_keys=True))
-        if signature != previous:
+        changed = signature != previous
+        if changed:
+            unchanged_since = time.monotonic()
             print(json.dumps(job, ensure_ascii=False), flush=True); previous = signature
+            sync_flight(args)
+        if changed or time.monotonic() - last_sample_at >= 30:
+            record_job_sample("remote_build", job, poll_count=polls,
+                              unchanged_seconds=time.monotonic() - unchanged_since,
+                              poll_interval_seconds=args.poll_interval)
+            last_sample_at = time.monotonic()
         if job.get("status") in {"succeeded", "failed", "cancelled", "timed_out"}:
+            sync_flight(args)
             if job.get("status") != "succeeded": raise SystemExit(1)
             return
         time.sleep(args.poll_interval)
@@ -388,8 +470,10 @@ def cmd_create_compiler_task(args):
     body = {"operation": args.operation, "agent_id": args.agent_id,
             "platform": args.platform, "workspace_id": args.workspace_id,
             "state": state}
-    print(json.dumps(authenticated(args, "/v1/dev/compiler-tasks", method="POST", body=body),
-                     ensure_ascii=False, indent=2), flush=True)
+    result = authenticated(args, "/v1/dev/compiler-tasks", method="POST", body=body)
+    record_flight("compiler_task_created", task=result)
+    sync_flight(args, str(result.get("id", "")))
+    print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
 
 
 def cmd_update_compiler_task(args):
@@ -399,9 +483,9 @@ def cmd_update_compiler_task(args):
         if value is not None:
             body[key] = value
     task_id = urllib.parse.quote(args.task_id, safe="")
-    print(json.dumps(authenticated(args, f"/v1/dev/compiler-tasks/{task_id}",
-                                   method="PATCH", body=body),
-                     ensure_ascii=False, indent=2), flush=True)
+    result = authenticated(args, f"/v1/dev/compiler-tasks/{task_id}", method="PATCH", body=body)
+    record_flight("compiler_task_updated", task=result, patch=body)
+    print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
 
 
 def cmd_checkpoint_package(args):
@@ -411,6 +495,9 @@ def cmd_checkpoint_package(args):
     result = request(args.platform, f"/v1/dev/compiler-tasks/{task_id}/package",
                      method="POST", data=payload, auth=True,
                      content_type="application/gzip")
+    record_flight("package_checkpoint_uploaded", task_id=args.task_id,
+                  package=str(package), package_hash=result.get("package_hash"), archive=stats)
+    sync_flight(args, args.task_id)
     print(json.dumps({**result, "archive": stats,
                       "local_sha256": hashlib.sha256(payload).hexdigest()},
                      ensure_ascii=False, indent=2), flush=True)
@@ -525,20 +612,25 @@ def main():
         print(json.dumps(authenticated(args, "/v1/dev/compiler-contract"), ensure_ascii=False, indent=2))
     elif args.command == "build-preflight":
         result = authenticated(args, "/v1/dev/build-preflight")
+        record_flight("build_preflight", platform=args.platform, result=result)
         print(json.dumps(result, ensure_ascii=False, indent=2))
         if not result.get("ready"):
             raise SystemExit(1)
     elif args.command == "model-probe":
         model = urllib.parse.quote(args.model, safe="")
-        print(json.dumps(authenticated(args, f"/v1/dev/model-probe/{model}", method="POST"),
-                         ensure_ascii=False, indent=2))
+        result = authenticated(args, f"/v1/dev/model-probe/{model}", method="POST")
+        record_flight("model_probe", requested_model=args.model, result=result)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "feedback":
         markdown = pathlib.Path(args.markdown).read_text(encoding="utf-8")
         body = {"plugin": "codex", "plugin_version": args.plugin_version,
                 "operation": args.operation, "agent_ids": args.agent_id,
                 "publish_job_id": args.publish_job, "markdown": markdown}
-        print(json.dumps(authenticated(args, "/v1/dev/feedback", method="POST", body=body),
-                         ensure_ascii=False, indent=2))
+        result = authenticated(args, "/v1/dev/feedback", method="POST", body=body)
+        record_flight("feedback_uploaded", filename=pathlib.Path(args.markdown).name,
+                      feedback_id=result.get("feedback_id"), publish_job_id=args.publish_job)
+        sync_flight(args)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
     elif args.command == "build-test":
         cmd_build_test(args)
     elif args.command == "validate-package":

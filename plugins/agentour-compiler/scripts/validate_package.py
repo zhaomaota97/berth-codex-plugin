@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static preflight aligned with Agentour compiler contract v2026-07-14.1."""
+"""Static preflight aligned with Agentour Compiler Contract v4."""
 
 from __future__ import annotations
 
@@ -107,7 +107,36 @@ def main() -> int:
         package_json = json.loads((root / "payload/package.json").read_text(encoding="utf-8"))
         if str((package_json.get("engines") or {}).get("node", "")) != ">=24":
             critical.append('payload/package.json must declare engines.node: ">=24"')
+        if int(manifest.get("compiler_contract_version", 0) or 0) >= 4:
+            dependencies = {**(package_json.get("dependencies") or {}),
+                            **(package_json.get("devDependencies") or {})}
+            ranged = [f"{name}@{version}" for name, version in dependencies.items()
+                      if isinstance(version, str) and version.startswith(("^", "~", ">", "<", "*"))]
+            if ranged: critical.append("Contract v4 requires exact dependency versions: " + ", ".join(ranged))
+            if "overrides" in (package_json.get("pnpm") or {}):
+                critical.append("Contract v4 forbids package.json#pnpm.overrides; use explicit dependencies")
     except Exception as exc: critical.append(f"Invalid payload/package.json: {exc}")
+
+    if int(manifest.get("compiler_contract_version", 0) or 0) >= 4:
+        agent_source = ((root / "payload/agent/agent.ts").read_text(encoding="utf-8", errors="replace")
+                        if (root / "payload/agent/agent.ts").is_file() else "")
+        if re.search(r"defineAgent\s*\(\s*\{[\s\S]*?\bsystem\s*:", agent_source):
+            critical.append("Eve 0.20 does not accept defineAgent.system; use agent/instructions.md")
+        if re.search(r"if\s*\(\s*!\s*\w*(?:token|key|url)\w*\s*\)\s*\{?\s*throw\b",
+                     agent_source, re.I):
+            critical.append("Do not throw for missing Runtime credentials during module import/build")
+        lock_text = ((root / "payload/pnpm-lock.yaml").read_text(encoding="utf-8", errors="replace")
+                     if (root / "payload/pnpm-lock.yaml").is_file() else "")
+        workspace = ((root / "payload/pnpm-workspace.yaml").read_text(encoding="utf-8", errors="replace")
+                     if (root / "payload/pnpm-workspace.yaml").is_file() else "")
+        release_age = re.search(r"(?m)^\s*minimumReleaseAge\s*:\s*(\d+)\s*$", workspace)
+        if not release_age or int(release_age.group(1)) < 1440:
+            critical.append("pnpm-workspace.yaml must set minimumReleaseAge: 1440")
+        native = [name for name in ("@mongodb-js/zstd", "node-liblzma") if name in lock_text]
+        missing_native = [name for name in native if not re.search(
+            rf"(?m)^\s*['\"]?{re.escape(name)}['\"]?\s*:\s*true\s*$", workspace)]
+        if native and ("allowBuilds:" not in workspace or missing_native):
+            critical.append("pnpm-workspace.yaml allowBuilds is missing: " + ", ".join(missing_native or native))
 
     runtime_ui = manifest.get("runtime_ui") or {}; ui_caps = runtime_ui.get("capabilities") or {}
     for capability in manifest.get("capabilities") or []:

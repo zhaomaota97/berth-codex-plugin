@@ -1,4 +1,5 @@
 {
+  "compiler_contract_version": 4,
   "id": "AGENT_ID",
   "name": "AGENT_NAME",
   "version": "0.1.0",
