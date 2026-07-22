@@ -107,6 +107,8 @@ def main() -> int:
         package_json = json.loads((root / "payload/package.json").read_text(encoding="utf-8"))
         if str((package_json.get("engines") or {}).get("node", "")) != ">=24":
             critical.append('payload/package.json must declare engines.node: ">=24"')
+        if package_json.get("packageManager") != "pnpm@10.23.0":
+            critical.append('payload/package.json must declare packageManager: "pnpm@10.23.0"')
         if int(manifest.get("compiler_contract_version", 0) or 0) >= 4:
             dependencies = {**(package_json.get("dependencies") or {}),
                             **(package_json.get("devDependencies") or {})}

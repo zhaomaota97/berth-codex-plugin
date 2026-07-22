@@ -32,7 +32,7 @@ class PluginTests(unittest.TestCase):
             "README.md": "# Demo\n",
             "RELEASE.md": "# 0.1.0\n",
             "tests/smoke.yaml": 'schema_version: 1\ncases:\n  - send: "x"\n    expect_contains: "ok"\n',
-            "payload/package.json": '{"engines":{"node":">=24"}}\n',
+            "payload/package.json": '{"engines":{"node":">=24"},"packageManager":"pnpm@10.23.0"}\n',
             "payload/pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
             "payload/agent/agent.ts": "const url = process.env.AGENTOUR_URL;\n",
             "payload/agent/instructions.md": "# Demo\n缺少信息时调用 ask_question。\n",
@@ -118,6 +118,7 @@ class PluginTests(unittest.TestCase):
         self.assertNotIn("system:", template)
         self.assertNotIn("throw new Error", template)
         package = json.loads((PLUGIN / "templates/package.json").read_text(encoding="utf-8"))
+        self.assertEqual(package["packageManager"], "pnpm@10.23.0")
         self.assertTrue(all(not version.startswith(("^", "~"))
                             for version in package["dependencies"].values()))
         workspace = (PLUGIN / "templates/pnpm-workspace.yaml").read_text(encoding="utf-8")
