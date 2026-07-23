@@ -70,20 +70,28 @@ def request(platform: str, path: str, *, method: str = "GET",
         if not token.startswith("at_"):
             raise SystemExit(f"No saved developer token for {platform}; store one before continuing")
         headers["Authorization"] = f"Bearer {token}"
-    req = urllib.request.Request(base_url(platform) + path, data=data,
-                                 headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=120) as response:
-            body = response.read()
-            return json.loads(body) if body else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "replace")
-        if auth and exc.code in {401, 403} and not os.environ.get("AGENTOUR_TOKEN", "").strip():
-            delete_token(platform)
-        raise SystemExit(f"Agentour API {exc.code}: {detail}") from exc
-    except (urllib.error.URLError, TimeoutError) as exc:
-        reason = getattr(exc, "reason", exc)
-        raise APITransportError(f"Cannot reach {base_url(platform)}: {reason}") from exc
+    attempts = 4 if method in {"GET", "HEAD"} else 1
+    for attempt in range(attempts):
+        req = urllib.request.Request(base_url(platform) + path, data=data,
+                                     headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as response:
+                body = response.read()
+                return json.loads(body) if body else {}
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")
+            if exc.code in {502, 503, 504} and attempt + 1 < attempts:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            if auth and exc.code in {401, 403} and not os.environ.get("AGENTOUR_TOKEN", "").strip():
+                delete_token(platform)
+            raise SystemExit(f"Agentour API {exc.code}: {detail}") from exc
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt + 1 < attempts:
+                time.sleep(0.5 * (2 ** attempt))
+                continue
+            reason = getattr(exc, "reason", exc)
+            raise APITransportError(f"Cannot reach {base_url(platform)}: {reason}") from exc
 
 
 def ignore_rules(package_dir: pathlib.Path) -> tuple[set[str], set[str]]:
@@ -207,10 +215,11 @@ def check_update(*, auto: bool) -> dict:
     if outdated and auto:
         refresh = subprocess.run(
             ["codex", "plugin", "marketplace", "upgrade", "agentour-platform"],
-            text=True, capture_output=True)
+            text=True, capture_output=True, encoding="utf-8", errors="replace")
         completed = (subprocess.run(
             ["codex", "plugin", "add", "agentour-compiler@agentour-platform"],
-            text=True, capture_output=True) if refresh.returncode == 0 else refresh)
+            text=True, capture_output=True, encoding="utf-8", errors="replace")
+                     if refresh.returncode == 0 else refresh)
         result["updated"] = refresh.returncode == 0 and completed.returncode == 0
         if not result["updated"]:
             result["error"] = (completed.stderr or completed.stdout)[-1000:]
@@ -361,15 +370,27 @@ def cmd_build_test(args):
     host_build = False
     pnpm_command = "pnpm.cmd" if os.name == "nt" else "pnpm"
     try:
-        node_version = subprocess.check_output(["node", "--version"], text=True).strip()
+        node_version = subprocess.check_output(
+            ["node", "--version"], text=True, encoding="utf-8", errors="replace").strip()
         host_build = int(node_version.lstrip("v").split(".", 1)[0]) >= 24
         if host_build:
-            subprocess.run([pnpm_command, "--version"], check=True, capture_output=True, text=True)
+            probes = ([pnpm_command, "--version"], ["corepack", "pnpm", "--version"])
+            for probe in probes:
+                try:
+                    subprocess.run(probe, check=True, capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace")
+                    pnpm_command = probe[:-1]
+                    break
+                except (FileNotFoundError, subprocess.CalledProcessError):
+                    continue
+            else:
+                host_build = False
     except (FileNotFoundError, subprocess.CalledProcessError, ValueError):
         host_build = False
     if not host_build:
         docker = subprocess.run(["docker", "image", "inspect", "agentour-runtime:1"],
-                                text=True, capture_output=True)
+                                text=True, capture_output=True,
+                                encoding="utf-8", errors="replace")
         if docker.returncode != 0:
             raise SystemExit("Node 24+ is unavailable and Docker image agentour-runtime:1 is missing")
     td = tempfile.mkdtemp(prefix="agentour-build-")
@@ -384,9 +405,10 @@ def cmd_build_test(args):
         work = target / "payload"
         docker_user = (["--user", f"{os.getuid()}:{os.getgid()}"]
                        if hasattr(os, "getuid") else [])
+        pnpm_prefix = pnpm_command if isinstance(pnpm_command, list) else [pnpm_command]
         commands = ([
-            [pnpm_command, "install", "--frozen-lockfile"],
-            [pnpm_command, "exec", "eve", "build"],
+            [*pnpm_prefix, "install", "--frozen-lockfile"],
+            [*pnpm_prefix, "exec", "eve", "build"],
         ] if host_build else [[
             "docker", "run", "--rm", *docker_user,
             "-e", "HOME=/tmp", "-e", "AGENTOUR_BUILD=1",
@@ -400,6 +422,7 @@ def cmd_build_test(args):
                          "AGENTOUR_URL": "https://test.agentour.ai",
                          "AGENTOUR_RUNTIME_TOKEN": "build-only-placeholder"}
             result = subprocess.run(command, cwd=work, text=True, capture_output=True,
+                                    encoding="utf-8", errors="replace",
                                     timeout=args.timeout, env=build_env)
             if result.returncode != 0:
                 record_flight("local_build_failed", package=str(package), command=command,
@@ -556,7 +579,14 @@ def cmd_update_compiler_task(args):
         if value is not None:
             body[key] = value
     task_id = urllib.parse.quote(args.task_id, safe="")
-    result = authenticated(args, f"/v1/dev/compiler-tasks/{task_id}", method="PATCH", body=body)
+    try:
+        result = authenticated(args, f"/v1/dev/compiler-tasks/{task_id}", method="PATCH", body=body)
+    except SystemExit as exc:
+        if "API 409" not in str(exc):
+            raise
+        latest = authenticated(args, f"/v1/dev/compiler-tasks/{task_id}")
+        body["expected_revision"] = latest.get("revision")
+        result = authenticated(args, f"/v1/dev/compiler-tasks/{task_id}", method="PATCH", body=body)
     record_flight("compiler_task_updated", task=result, patch=body)
     print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
 
@@ -666,6 +696,8 @@ def main():
     restore = sub.add_parser("restore-checkpoint")
     restore.add_argument("task_id")
     restore.add_argument("destination")
+    resolve_update = sub.add_parser("resolve-update-intent")
+    resolve_update.add_argument("target")
     for name in ("publish", "publish-async"):
         publish = sub.add_parser(name)
         publish.add_argument("package")
@@ -728,6 +760,10 @@ def main():
         cmd_checkpoint_package(args)
     elif args.command == "restore-checkpoint":
         cmd_restore_checkpoint(args)
+    elif args.command == "resolve-update-intent":
+        print(json.dumps(authenticated(args, "/v1/dev/packages/update-intents", method="POST",
+                                       body={"target": args.target}),
+                         ensure_ascii=False, indent=2))
     elif args.command == "publish":
         cmd_publish(args, False)
     else:

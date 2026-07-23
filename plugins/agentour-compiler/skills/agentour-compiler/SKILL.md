@@ -130,7 +130,9 @@ Create the matching local and remote Compiler Task immediately.
 
 ### 5A. Update an owned Agent
 
-Call `GET /v1/dev/packages` and `/v1/dev/packages/update-intents`; match only Packages owned by the
+Call `GET /v1/dev/packages`, then resolve the requested target with
+`resolve-update-intent <target>` (`POST /v1/dev/packages/update-intents` with JSON body
+`{"target":"<target>"}`); match only Packages owned by the
 validated developer identity. Exact ID continues; an exact name may continue after showing its
 summary; fuzzy or multiple matches require one choice. A missing match must ask whether the name is
 wrong or the user intended a new Agent—never silently create. Download the active immutable baseline,
