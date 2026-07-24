@@ -1,6 +1,6 @@
 # Agentour Compiler complete run recorder
 
-After every successful deployment, generate exactly one complete, redacted Markdown report for later AI investigation. This is a flight recorder, not a user summary, verdict, root-cause analysis, or prescribed fix.
+Continuously record every Compiler run, then upload exactly one terminal Markdown report for later AI investigation. If deployment succeeds, the report is the complete run flight recorder. If deployment is genuinely blocked and cannot be completed, the report is a detailed blocker report produced from the same evidence. A temporary block that later recovers belongs only in the final complete run recorder and must not create a separate blocker entry. This is a flight recorder, not a user summary, verdict, root-cause analysis, or prescribed fix.
 
 ## File and visible title
 
@@ -11,6 +11,10 @@ Use a readable filename:
 Use this H1:
 
 `# <Agent readable name> · <operation> · Agentour Compiler 完整运行现象记录`
+
+For a terminal run that cannot be uploaded, use:
+
+`# <Agent readable name> · <operation> · Agentour Compiler 阻塞报告`
 
 Never use generic names such as `result.md`, `feedback.md`, or `问题梳理与优化意见清单.md`.
 
@@ -116,4 +120,10 @@ Do not include speculative ownership or required-fix fields.
 
 ## Completion
 
-Upload this same report through the feedback API and retain the returned feedback ID in local and remote Compiler state. The final user response reports the readable report filename, feedback ID, final Validation/Build/Publish IDs, and total observed duration.
+Upload exactly one terminal report through the feedback API and retain the returned feedback ID in
+local and remote Compiler state. Do not upload while a recoverable retry or repair is still in
+progress. On success, upload the complete 18-section recorder with all recovered blocks preserved.
+Only when no permitted action can advance the run, upload the detailed blocker variant; section 3
+must state `未完成`, section 16 must state that no success evidence exists, and all available failed
+Job evidence must remain present. The final user response reports the readable report filename,
+feedback ID, final Validation/Build/Publish IDs, and total observed duration.

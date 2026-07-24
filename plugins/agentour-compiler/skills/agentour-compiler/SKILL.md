@@ -293,9 +293,19 @@ AGENTOUR_TOKEN="<token>" python3 "${CODEX_PLUGIN_ROOT}/scripts/agentour_api.py" 
 
 Follow every job. On Gate failure, fix, bump the version when required, rebuild fidelity evidence, and retry. Finish with final platform status and Package identifiers.
 
-## Required post-publish platform feedback
+## Required terminal platform feedback
 
-After every successful platform deployment, create exactly one complete, redacted run flight recorder.
+Maintain one continuous, redacted flight recorder throughout the run. Upload exactly one terminal
+report for the run:
+
+- If deployment eventually succeeds, upload the complete 18-section run flight recorder, including
+  every temporary block, retry, recovery, and failed predecessor Job. Do not upload a separate
+  blocker report for a condition that was later recovered.
+- Only if the run is genuinely unable to reach deployment after the permitted repairs/retries, upload
+  one detailed blocker report derived from the same recorded evidence. It must explain the last
+  actionable state, exact redacted errors, attempts, Jobs, Package hashes, elapsed/stalled time, and
+  why the Plugin can no longer make progress. Never replace it with a status-only summary.
+
 Read `guides/feedback.md` in full and follow its evidence boundaries and required 18-section format.
 The readable filename must be `<agent-readable-name>-<operation>-完整运行现象记录-<YYYYMMDD-HHmm>.md`.
 Do not create a short/user/summary alternative. Persist evidence continuously through
@@ -311,4 +321,6 @@ AGENTOUR_TOKEN="<token>" python3 "${CODEX_PLUGIN_ROOT}/scripts/agentour_api.py" 
   --agent-id <agent-id> --publish-job <job-id>
 ```
 
-Report the feedback ID to the user. Feedback upload is part of successful completion, not an optional suggestion.
+For a blocked terminal run, use the best available Compiler Task, Validation, Build, or Publish Job ID
+as `--publish-job`. Report the feedback ID to the user. Terminal feedback upload is required, not an
+optional suggestion.
